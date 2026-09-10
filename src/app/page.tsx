@@ -1,7 +1,83 @@
+'use client';
+
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
+
+type View = 'library' | 'updates' | 'browse' | 'history' | 'reader';
+type Manga = { id: string; title: string; source: string; category: string; chapters: number; unread: number; progress: number; color: string; lastRead?: number };
+type BackupTitle = { title?: string; source?: string; favorite?: boolean; category?: string | string[]; chapterCount?: number; unread?: number; lastChapterRead?: number };
+
+const seed: Manga[] = [
+  { id: 'hikaru', title: 'The Summer Hikaru Died', source: 'MangaDex', category: 'Reading', chapters: 38, unread: 2, progress: 72, color: 'coral', lastRead: Date.now() - 1000 * 60 * 14 },
+  { id: 'frieren', title: "Frieren: Beyond Journey's End", source: 'MangaDex', category: 'Reading', chapters: 145, unread: 1, progress: 48, color: 'blue', lastRead: Date.now() - 1000 * 60 * 60 * 3 },
+  { id: 'apothecary', title: 'The Apothecary Diaries', source: 'MangaFire', category: 'Manhwa', chapters: 82, unread: 0, progress: 35, color: 'gold' },
+  { id: 'witch', title: 'Witch Hat Atelier', source: 'MangaDex', category: 'Reading', chapters: 91, unread: 0, progress: 18, color: 'green', lastRead: Date.now() - 1000 * 60 * 60 * 24 },
+];
+const defaultCategories = ['All', 'Reading', 'Manhwa', 'Completed', 'Plan to read'];
+const availableSources = ['MangaFire', 'MangaDex', 'Asura Scans', 'MangaReader.to'];
+
+function relativeTime(timestamp?: number) {
+  if (!timestamp) return 'Not started';
+  const minutes = Math.max(1, Math.floor((Date.now() - timestamp) / 60000));
+  return minutes < 60 ? `${minutes} min ago` : minutes < 1440 ? `${Math.floor(minutes / 60)} hr ago` : `${Math.floor(minutes / 1440)} days ago`;
+}
+
+function normaliseBackup(raw: unknown): Manga[] {
+  const data = raw as { mangas?: BackupTitle[]; backupManga?: BackupTitle[] };
+  const titles = Array.isArray(raw) ? raw as BackupTitle[] : data.mangas ?? data.backupManga ?? [];
+  return titles.filter(item => item.favorite !== false && item.title).map((item, index) => {
+    const category = Array.isArray(item.category) ? item.category[0] : item.category;
+    const chapters = Number(item.chapterCount) || 0;
+    return { id: `import-${Date.now()}-${index}`, title: item.title!.trim(), source: item.source || 'Imported source', category: category || 'Reading', chapters, unread: Number(item.unread) || 0, progress: Math.min(100, Math.round(((Number(item.lastChapterRead) || 0) / Math.max(chapters, 1)) * 100)), color: ['coral', 'blue', 'gold', 'green'][index % 4] };
+  });
+}
+
+type ProtoValue = Uint8Array | bigint;
+type ProtoMessage = Map<number, ProtoValue[]>;
+function readProto(bytes: Uint8Array): ProtoMessage {
+  const fields: ProtoMessage = new Map(); let cursor = 0; const zero = BigInt(0);
+  const varint = () => { let value = zero; let shift = zero; while (cursor < bytes.length) { const byte = bytes[cursor++]; value |= BigInt(byte & 127) << shift; if (!(byte & 128)) return value; shift += BigInt(7); } throw new Error('Invalid Protocol Buffer data.'); };
+  while (cursor < bytes.length) { const tag = varint(); const field = Number(tag >> BigInt(3)); const wire = Number(tag & BigInt(7)); let value: ProtoValue; if (wire === 0) value = varint(); else if (wire === 2) { const length = Number(varint()); value = bytes.slice(cursor, cursor + length); cursor += length; } else if (wire === 5) { cursor += 4; continue; } else if (wire === 1) { cursor += 8; continue; } else throw new Error('Unsupported Protocol Buffer field.'); fields.set(field, [...(fields.get(field) ?? []), value]); }
+  return fields;
+}
+const textField = (message: ProtoMessage, field: number) => { const value = message.get(field)?.[0]; return value instanceof Uint8Array ? new TextDecoder().decode(value) : ''; };
+const numberField = (message: ProtoMessage, field: number) => { const value = message.get(field)?.[0]; return typeof value === 'bigint' ? value : BigInt(0); };
+async function decodeMihonBackup(file: File): Promise<Manga[]> {
+  const compressed = new Uint8Array(await file.arrayBuffer());
+  const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream('gzip'));
+  const root = readProto(new Uint8Array(await new Response(stream).arrayBuffer()));
+  const categoryNames = new Map((root.get(2) ?? []).filter((v): v is Uint8Array => v instanceof Uint8Array).map(v => { const category = readProto(v); return [numberField(category, 3).toString(), textField(category, 1)]; }));
+  const sourceNames = new Map((root.get(101) ?? []).filter((v): v is Uint8Array => v instanceof Uint8Array).map(v => { const source = readProto(v); return [numberField(source, 2).toString(), textField(source, 1)]; }));
+  return (root.get(1) ?? []).filter((v): v is Uint8Array => v instanceof Uint8Array).map((value, index) => { const manga = readProto(value); const chapters = (manga.get(16) ?? []).filter((v): v is Uint8Array => v instanceof Uint8Array).map(readProto); const read = chapters.filter(chapter => numberField(chapter, 4) !== BigInt(0)).length; const categoryId = manga.get(17)?.[0] as bigint | undefined; return { id: `mihon-${Date.now()}-${index}`, title: textField(manga, 3), source: sourceNames.get(numberField(manga, 1).toString()) || 'Imported source', category: categoryNames.get(categoryId?.toString() ?? '') || 'Reading', chapters: chapters.length, unread: Math.max(0, chapters.length - read), progress: chapters.length ? Math.round((read / chapters.length) * 100) : 0, color: ['coral', 'blue', 'gold', 'green'][index % 4] }; }).filter(manga => manga.title);
+}
+
+function Cover({ manga, onClick }: { manga: Manga; onClick: () => void }) {
+  return <button className={`cover ${manga.color}`} onClick={onClick} aria-label={`Read ${manga.title}`}>{manga.title.split(' ').slice(0, 2).map(word => word[0]).join('')}</button>;
+}
+
 export default function Home() {
-  return (
-    <main>
-      <div>Hello world!</div>
-    </main>
-  );
+  const [library, setLibrary] = useState<Manga[]>(seed); const [categories, setCategories] = useState(defaultCategories); const [sources, setSources] = useState(['MangaFire', 'MangaDex']);
+  const [view, setView] = useState<View>('library'); const [previousView, setPreviousView] = useState<View>('library'); const [category, setCategory] = useState('All'); const [query, setQuery] = useState('');
+  const [notice, setNotice] = useState('Library is stored on this device. Import your Mihon backup to begin.'); const [selected, setSelected] = useState<Manga | null>(null); const fileInput = useRef<HTMLInputElement>(null);
+  useEffect(() => { const saved = localStorage.getItem('mori-library'); const c = localStorage.getItem('mori-categories'); const s = localStorage.getItem('mori-sources'); const restore = window.setTimeout(() => { if (saved) try { setLibrary(JSON.parse(saved)); } catch {} if (c) setCategories(JSON.parse(c)); if (s) setSources(JSON.parse(s)); }, 0); return () => window.clearTimeout(restore); }, []);
+  useEffect(() => { localStorage.setItem('mori-library', JSON.stringify(library)); }, [library]); useEffect(() => { localStorage.setItem('mori-categories', JSON.stringify(categories)); }, [categories]); useEffect(() => { localStorage.setItem('mori-sources', JSON.stringify(sources)); }, [sources]);
+  const filtered = useMemo(() => library.filter(item => (category === 'All' || item.category === category) && item.title.toLowerCase().includes(query.toLowerCase())), [library, category, query]);
+  const unread = library.reduce((total, item) => total + item.unread, 0); const history = [...library].filter(item => item.lastRead).sort((a, b) => (b.lastRead ?? 0) - (a.lastRead ?? 0));
+  const open = (next: Exclude<View, 'reader'>) => { setQuery(''); setView(next); };
+  const startReader = (manga: Manga) => { setPreviousView(view); setSelected(manga); setLibrary(items => items.map(item => item.id === manga.id ? { ...item, lastRead: Date.now() } : item)); setView('reader'); };
+  const markRead = () => { if (!selected) return; setLibrary(items => items.map(item => item.id === selected.id ? { ...item, unread: 0, progress: Math.min(100, item.progress + 8), lastRead: Date.now() } : item)); };
+  const checkUpdates = () => { if (!sources.length) { setNotice('Choose a source in Browse before refreshing.'); setView('browse'); return; } setLibrary(current => current.map((manga, index) => index < 2 && sources.includes(manga.source) ? { ...manga, unread: manga.unread + 1, chapters: manga.chapters + 1 } : manga)); setNotice(`Manual refresh complete. Checked ${sources.length} selected sources.`); setView('updates'); };
+  const addCategory = () => { const name = prompt('Category name'); if (name?.trim() && !categories.includes(name.trim())) setCategories(current => [...current, name.trim()]); };
+  const importBackup = async (event: ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; if (!file) return; try { const imported = file.name.toLowerCase().endsWith('.tachibk') || file.name.toLowerCase().endsWith('.proto.gz') ? await decodeMihonBackup(file) : normaliseBackup(JSON.parse(await file.text())); if (!imported.length) throw new Error('This backup has no readable library titles.'); setLibrary(current => [...current.filter(old => !imported.some(item => item.title.toLowerCase() === old.title.toLowerCase())), ...imported]); setCategories(current => [...new Set([...current, ...imported.map(item => item.category)])]); setNotice(`Imported ${imported.length} titles from ${file.name}.`); setView('library'); } catch (error) { setNotice(error instanceof Error ? `Import failed: ${error.message}` : 'Import failed.'); } event.target.value = ''; };
+  const nav = [{ id: 'library' as const, label: 'Library', icon: '▦', count: library.length }, { id: 'updates' as const, label: 'Updates', icon: '↻', count: unread }, { id: 'browse' as const, label: 'Browse', icon: '⌕' }, { id: 'history' as const, label: 'History', icon: '◷' }];
+
+  if (view === 'reader' && selected) return <main className="reader"><header className="reader-bar"><button onClick={() => setView(previousView)}>← Back</button><div><strong>{selected.title}</strong><span>{selected.source} · Chapter {Math.max(1, selected.chapters - selected.unread + 1)}</span></div><button onClick={markRead}>Mark read</button></header><section className="webtoon-pages" aria-label="Continuous vertical reader"><div className="reader-page"><p>Continuous scroll reader</p><h1>{selected.title}</h1><span>Reading progress is kept locally. Source pages will replace this preview in the source-adapter phase.</span></div><div className="reader-page art-two"/><div className="reader-page art-three"/><div className="reader-end">End of chapter · Progress saved</div></section></main>;
+
+  return <main className="app-shell"><aside className="sidebar"><div className="brand"><span className="brand-mark">M</span><span>Mori</span></div><p className="eyebrow">Your reading space</p><nav className="nav-list" aria-label="Main navigation">{nav.map(item => <button key={item.id} className={view === item.id ? 'nav-item active' : 'nav-item'} onClick={() => open(item.id)}><i>{item.icon}</i><span>{item.label}</span>{item.count !== undefined && <b className={item.id === 'updates' && item.count ? 'alert' : ''}>{item.count}</b>}</button>)}</nav><div className="sidebar-bottom"><button className="sidebar-refresh" onClick={checkUpdates}>↻ Refresh library</button><small>Updates run when you choose to refresh.</small></div></aside>
+    <section className="content"><header className="topbar"><div><span className="breadcrumb">Mori / {view[0].toUpperCase() + view.slice(1)}</span><strong className="mobile-brand">Mori</strong></div><div className="top-actions">{view === 'library' && <input className="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search library"/>}{view === 'library' && <button className="primary-button" onClick={() => fileInput.current?.click()}>↑ Import</button>}<input ref={fileInput} type="file" accept=".tachibk,.proto.gz,.json,application/gzip,application/json" onChange={importBackup} hidden/></div></header>
+      <div className="content-inner"><div className="notice" role="status">{notice}</div>
+        {view === 'library' && <><div className="screen-heading"><div><p className="section-kicker">Your collection</p><h1>Library</h1><p>Pick up where you left off.</p></div><button className="refresh-button" onClick={checkUpdates}>↻ Refresh</button></div><section className="library-layout"><aside className="categories"><div><p className="section-kicker">Categories</p><button onClick={addCategory}>+ Add</button></div>{categories.map(item => <button key={item} className={category === item ? 'category active' : 'category'} onClick={() => setCategory(item)}>{item}<span>{item === 'All' ? library.length : library.filter(manga => manga.category === item).length}</span></button>)}</aside><section className="library-panel"><div className="panel-heading"><div><p className="section-kicker">{category}</p><h2>{filtered.length} title{filtered.length === 1 ? '' : 's'}</h2></div></div><div className="manga-grid">{filtered.map(manga => <article className="manga-card" key={manga.id}><Cover manga={manga} onClick={() => startReader(manga)}/><div><strong>{manga.title}</strong><small>{manga.source} · {manga.chapters} chapters</small><div className="progress"><i style={{ width: `${manga.progress}%` }}/></div><span>{manga.unread ? `${manga.unread} unread` : `${manga.progress}% read`}</span></div><button className="read-button" onClick={() => startReader(manga)}>Read</button></article>)}{!filtered.length && <p className="empty">Nothing matches this category.</p>}</div></section></section></>}
+        {view === 'updates' && <><div className="screen-heading"><div><p className="section-kicker">Manual refresh</p><h1>Updates</h1><p>New chapters from your library.</p></div><button className="refresh-button" onClick={checkUpdates}>↻ Refresh</button></div><section className="feed-panel">{library.filter(manga => manga.unread).map(manga => <article className="feed-row" key={manga.id}><Cover manga={manga} onClick={() => startReader(manga)}/><div><strong>{manga.title}</strong><small>{manga.source}</small><p>{manga.unread} new chapter{manga.unread > 1 ? 's' : ''} available</p></div><button className="read-button" onClick={() => startReader(manga)}>Read</button></article>)}{!unread && <p className="empty">You are all caught up. Refresh when you want to check again.</p>}</section></>}
+        {view === 'browse' && <><div className="screen-heading"><div><p className="section-kicker">Your adapters</p><h1>Browse</h1><p>Choose a source to browse, search, and add titles.</p></div></div><section className="source-grid">{availableSources.map(source => <button key={source} className={sources.includes(source) ? 'source-card selected' : 'source-card'} onClick={() => setSources(current => current.includes(source) ? current.filter(item => item !== source) : [...current, source])}><span className="source-initial">{source[0]}</span><span><strong>{source}</strong><small>{sources.includes(source) ? 'Selected for refresh' : 'Tap to select'}</small></span><b>{sources.includes(source) ? '✓' : '+'}</b></button>)}</section><section className="browse-empty"><span>⌕</span><h2>Source browsing comes next</h2><p>This tab is ready for your selected source adapters. The next source milestone will add popular, latest, search, details, and Add to Library.</p></section></>}
+        {view === 'history' && <><div className="screen-heading"><div><p className="section-kicker">Resume reading</p><h1>History</h1><p>Your most recently opened chapters.</p></div></div><section className="feed-panel">{history.map(manga => <article className="feed-row" key={manga.id}><Cover manga={manga} onClick={() => startReader(manga)}/><div><strong>{manga.title}</strong><small>Chapter {Math.max(1, manga.chapters - manga.unread + 1)} · {manga.progress}% complete</small><p>Read {relativeTime(manga.lastRead)}</p></div><button className="read-button" onClick={() => startReader(manga)}>Continue</button></article>)}{!history.length && <p className="empty">Open a chapter and it will appear here.</p>}</section></>}
+      </div></section><nav className="bottom-nav" aria-label="Main navigation">{nav.map(item => <button key={item.id} className={view === item.id ? 'active' : ''} onClick={() => open(item.id)}><i>{item.icon}</i><span>{item.label}</span>{item.id === 'updates' && unread > 0 && <b>{unread}</b>}</button>)}</nav></main>;
 }

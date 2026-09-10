@@ -32,6 +32,21 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
+
+# Personal library data and Mihon backups
+*.tachibk
+*.proto.gz
+*.tachiyomi
+*.mihon
+backups/
+exports/
+data/
+
+# Local tooling caches
+.npm-cache/
+.wrangler/
+.dev.vars
 
 # vercel
 .vercel
