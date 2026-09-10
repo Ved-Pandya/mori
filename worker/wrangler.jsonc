@@ -1,0 +1,14 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "mori-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-10",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "mori-library",
+      "database_id": "34bfe86a-fdd3-4aaa-8363-d58dfc8a862f",
+      "migrations_dir": "migrations"
+    }
+  ]
+}
