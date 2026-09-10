@@ -15,3 +15,4 @@ async function proxy(request: Request, path = "") {
 
 export async function GET(request: Request) { return proxy(request); }
 export async function POST(request: Request) { return proxy(request, "/import"); }
+export async function PATCH(request: Request) { return proxy(request, "/progress"); }

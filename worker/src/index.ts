@@ -57,6 +57,18 @@ export default {
       return json({ imported: manga.length }, 201, origin);
     }
 
+    if (request.method === "PATCH" && url.pathname === "/api/library/progress") {
+      const payload = await request.json() as { mangaId?: string; progress?: number; unread?: number };
+      if (!payload.mangaId) return json({ error: "mangaId is required." }, 400, origin);
+      const progress = Math.max(0, Math.min(100, Number(payload.progress) || 0));
+      const unread = Math.max(0, Number(payload.unread) || 0);
+      await env.DB.batch([
+        env.DB.prepare("INSERT INTO reading_progress (manga_id, progress_percent, last_read_at) VALUES (?, ?, unixepoch()) ON CONFLICT(manga_id) DO UPDATE SET progress_percent = excluded.progress_percent, last_read_at = unixepoch()").bind(payload.mangaId, progress),
+        env.DB.prepare("UPDATE manga SET unread_count = ?, updated_at = unixepoch() WHERE id = ?").bind(unread, payload.mangaId),
+      ]);
+      return json({ saved: true }, 200, origin);
+    }
+
     return json({ error: "Not found" }, 404, origin);
   },
 } satisfies ExportedHandler<Env>;
