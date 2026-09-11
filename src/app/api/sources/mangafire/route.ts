@@ -1,23 +1,18 @@
 import { cookies } from "next/headers";
-import { createHmac } from "node:crypto";
 import { sessionCookie, validSession } from "@/lib/mori-auth";
 import { getMangaFireChapters, getMangaFireDetails, getMangaFirePages, listMangaFireTitles, MangaFireError } from "@/lib/sources/mangafire";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
-function proxiedImageUrl(sourceUrl: string) {
-  const workerUrl = process.env.MORI_WORKER_URL;
-  const token = process.env.MORI_API_TOKEN;
-  if (!workerUrl || !token) throw new Error("The image proxy is not configured.");
-  const expires = Math.floor(Date.now() / 1000) + 60 * 60 * 12;
-  const signature = createHmac("sha256", token).update(`${expires}\n${sourceUrl}`).digest("base64url");
-  const proxy = new URL("/api/image", workerUrl);
+function proxiedImageUrl(sourceUrl: string, requestUrl: string) {
+  const proxy = new URL("/api/sources/mangafire", requestUrl);
+  proxy.searchParams.set("action", "image");
   proxy.searchParams.set("url", sourceUrl);
-  proxy.searchParams.set("expires", String(expires));
-  proxy.searchParams.set("signature", signature);
-  return proxy.toString();
+  return `${proxy.pathname}${proxy.search}`;
 }
+
+const isMangaFireImage = (url: URL) => url.protocol === "https:" && /^(?:[a-z0-9-]+\.)*mfcdn\d*\.xyz$/i.test(url.hostname);
 
 export async function GET(request: Request) {
   const jar = await cookies();
@@ -27,11 +22,21 @@ export async function GET(request: Request) {
   const action = url.searchParams.get("action") ?? "popular";
 
   try {
+    if (action === "image") {
+      const sourceUrl = url.searchParams.get("url") ?? "";
+      let target: URL;
+      try { target = new URL(sourceUrl); } catch { return Response.json({ error: "Invalid image URL." }, { status: 400 }); }
+      if (!isMangaFireImage(target)) return Response.json({ error: "Image host is not allowed." }, { status: 403 });
+      const image = await fetch(target, { signal: AbortSignal.timeout(15000), cache: "force-cache", headers: { Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8", Referer: "https://mangafire.to/", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36" } });
+      if (!image.ok || !image.body) return Response.json({ error: `Image source returned ${image.status}.` }, { status: 502 });
+      return new Response(image.body, { headers: { "Cache-Control": "private, max-age=43200", "Content-Type": image.headers.get("Content-Type") ?? "image/jpeg", "X-Content-Type-Options": "nosniff" } });
+    }
+
     if (action === "pages") {
       const chapterId = Number(url.searchParams.get("chapterId"));
       if (!Number.isSafeInteger(chapterId) || chapterId <= 0) return Response.json({ error: "A valid chapterId is required." }, { status: 400 });
       const pages = await getMangaFirePages(chapterId);
-      return Response.json({ pages: pages.map(page => ({ ...page, url: proxiedImageUrl(page.url) })) });
+      return Response.json({ pages: pages.map(page => ({ ...page, url: proxiedImageUrl(page.url, request.url) })) });
     }
 
     if (action === "details") {
