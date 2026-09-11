@@ -149,6 +149,8 @@ html:root .webtoon-pages {
   max-width: 760px;
   min-height: 100dvh;
   margin: auto;
+  padding-top: max(54px, env(safe-area-inset-top));
+  padding-bottom: env(safe-area-inset-bottom);
   background: #111;
 }
 
@@ -245,6 +247,10 @@ html:root[data-theme='dark'] .chapter-list {
 }
 
 @media (max-width: 560px) {
+  html:root .reader-bar {
+    padding: calc(10px + env(safe-area-inset-top)) 10px 10px;
+  }
+
   .manga-details-screen {
     padding-bottom: 130px;
   }

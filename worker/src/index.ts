@@ -23,6 +23,21 @@ const originFor = (request: Request) => {
 };
 
 const isAuthorized = (request: Request, env: Env) => request.headers.get("Authorization") === `Bearer ${env.API_TOKEN}`;
+const decodeBase64Url = (value: string) => {
+  const base64 = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
+  return Uint8Array.from(atob(base64), character => character.charCodeAt(0));
+};
+const validImageSignature = async (sourceUrl: string, expires: number, signature: string, secret: string) => {
+  const now = Math.floor(Date.now() / 1000);
+  if (!Number.isSafeInteger(expires) || expires < now || expires > now + 60 * 60 * 24) return false;
+  try {
+    const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+    return crypto.subtle.verify("HMAC", key, decodeBase64Url(signature), new TextEncoder().encode(`${expires}\n${sourceUrl}`));
+  } catch {
+    return false;
+  }
+};
+const isMangaFireImage = (url: URL) => url.protocol === "https:" && /^(?:[a-z0-9-]+\.)*mfcdn\d*\.xyz$/i.test(url.hostname);
 const sourceId = (name: string) => `source:${name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
 const categoryId = (name: string) => `category:${name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
 const normalizedTitle = (title: string) => title.trim().toLocaleLowerCase().replace(/\s+/g, " ");
@@ -57,6 +72,18 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === "GET" && url.pathname === "/health") return json({ ok: true }, 200, origin);
+
+    if (request.method === "GET" && url.pathname === "/api/image") {
+      const sourceUrl = url.searchParams.get("url") ?? "";
+      const expires = Number(url.searchParams.get("expires"));
+      const signature = url.searchParams.get("signature") ?? "";
+      let target: URL;
+      try { target = new URL(sourceUrl); } catch { return json({ error: "Invalid image URL." }, 400, origin); }
+      if (!isMangaFireImage(target) || !await validImageSignature(sourceUrl, expires, signature, env.API_TOKEN)) return json({ error: "Invalid or expired image request." }, 403, origin);
+      const upstream = await fetch(target, { headers: { "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8", "Referer": "https://mangafire.to/", "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148" }, cf: { cacheEverything: true, cacheTtl: 60 * 60 * 24 } });
+      if (!upstream.ok || !upstream.body) return json({ error: `Image source returned ${upstream.status}.` }, 502, origin);
+      return new Response(upstream.body, { headers: { "Access-Control-Allow-Origin": origin, "Cache-Control": "public, max-age=43200", "Content-Type": upstream.headers.get("Content-Type") ?? "image/jpeg", "X-Content-Type-Options": "nosniff" } });
+    }
 
     if (url.pathname.startsWith("/api/") && !isAuthorized(request, env)) return json({ error: "Unauthorized" }, 401, origin);
 

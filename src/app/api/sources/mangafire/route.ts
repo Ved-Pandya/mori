@@ -1,9 +1,23 @@
 import { cookies } from "next/headers";
+import { createHmac } from "node:crypto";
 import { sessionCookie, validSession } from "@/lib/mori-auth";
 import { getMangaFireChapters, getMangaFireDetails, getMangaFirePages, listMangaFireTitles, MangaFireError } from "@/lib/sources/mangafire";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
+
+function proxiedImageUrl(sourceUrl: string) {
+  const workerUrl = process.env.MORI_WORKER_URL;
+  const token = process.env.MORI_API_TOKEN;
+  if (!workerUrl || !token) throw new Error("The image proxy is not configured.");
+  const expires = Math.floor(Date.now() / 1000) + 60 * 60 * 12;
+  const signature = createHmac("sha256", token).update(`${expires}\n${sourceUrl}`).digest("base64url");
+  const proxy = new URL("/api/image", workerUrl);
+  proxy.searchParams.set("url", sourceUrl);
+  proxy.searchParams.set("expires", String(expires));
+  proxy.searchParams.set("signature", signature);
+  return proxy.toString();
+}
 
 export async function GET(request: Request) {
   const jar = await cookies();
@@ -16,7 +30,8 @@ export async function GET(request: Request) {
     if (action === "pages") {
       const chapterId = Number(url.searchParams.get("chapterId"));
       if (!Number.isSafeInteger(chapterId) || chapterId <= 0) return Response.json({ error: "A valid chapterId is required." }, { status: 400 });
-      return Response.json({ pages: await getMangaFirePages(chapterId) });
+      const pages = await getMangaFirePages(chapterId);
+      return Response.json({ pages: pages.map(page => ({ ...page, url: proxiedImageUrl(page.url) })) });
     }
 
     if (action === "details") {
