@@ -6,6 +6,9 @@ type ImportManga = {
   id: string;
   title: string;
   source: string;
+  sourceUrl?: string;
+  coverUrl?: string;
+  latestChapter?: number;
   category: string;
   categories?: string[];
   chapters: number;
@@ -58,7 +61,7 @@ export default {
     if (url.pathname.startsWith("/api/") && !isAuthorized(request, env)) return json({ error: "Unauthorized" }, 401, origin);
 
     if (request.method === "GET" && url.pathname === "/api/library") {
-      const { results } = await env.DB.prepare(`SELECT manga.id, manga.title, manga.source_name AS source, manga.cover_url, manga.chapter_count AS chapters, manga.unread_count AS unread, COALESCE((SELECT json_group_array(categories.name) FROM manga_categories JOIN categories ON categories.id = manga_categories.category_id WHERE manga_categories.manga_id = manga.id), '[]') AS categories_json, COALESCE(reading_progress.progress_percent, 0) AS progress, reading_progress.last_read_at FROM manga LEFT JOIN reading_progress ON reading_progress.manga_id = manga.id WHERE manga.in_library = 1 ORDER BY manga.title`).all();
+      const { results } = await env.DB.prepare(`SELECT manga.id, manga.title, manga.source_name AS source, manga.source_url, manga.cover_url, manga.latest_chapter_number, manga.chapter_count AS chapters, manga.unread_count AS unread, COALESCE((SELECT json_group_array(categories.name) FROM manga_categories JOIN categories ON categories.id = manga_categories.category_id WHERE manga_categories.manga_id = manga.id), '[]') AS categories_json, COALESCE(reading_progress.progress_percent, 0) AS progress, reading_progress.last_read_at FROM manga LEFT JOIN reading_progress ON reading_progress.manga_id = manga.id WHERE manga.in_library = 1 ORDER BY manga.title`).all();
       const manga = results.map((row) => { const item = row as Record<string, unknown>; const categories = JSON.parse(String(item.categories_json || "[]")) as string[]; const { categories_json: _, ...rest } = item; void _; return { ...rest, categories, category: categories[0] || "Uncategorized" }; });
       return json({ manga }, 200, origin);
     }
@@ -156,7 +159,7 @@ export default {
         const categories = [...new Set((item.categories?.length ? item.categories : [item.category]).filter(Boolean))];
         return [
           env.DB.prepare("INSERT INTO sources (id, name) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name").bind(source, item.source),
-          env.DB.prepare("INSERT INTO manga (id, source_id, title, source_name, chapter_count, unread_count, in_library, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, unixepoch()) ON CONFLICT(id) DO UPDATE SET title = excluded.title, source_name = excluded.source_name, chapter_count = excluded.chapter_count, unread_count = excluded.unread_count, updated_at = unixepoch()").bind(item.id, source, item.title, item.source, item.chapters, item.unread),
+          env.DB.prepare("INSERT INTO manga (id, source_id, title, source_name, source_url, cover_url, latest_chapter_number, chapter_count, unread_count, in_library, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, unixepoch()) ON CONFLICT(id) DO UPDATE SET source_id = excluded.source_id, title = excluded.title, source_name = excluded.source_name, source_url = COALESCE(excluded.source_url, manga.source_url), cover_url = COALESCE(excluded.cover_url, manga.cover_url), latest_chapter_number = COALESCE(excluded.latest_chapter_number, manga.latest_chapter_number), chapter_count = excluded.chapter_count, unread_count = excluded.unread_count, updated_at = unixepoch()").bind(item.id, source, item.title, item.source, item.sourceUrl ?? null, item.coverUrl ?? null, item.latestChapter ?? null, item.chapters, item.unread),
           env.DB.prepare("DELETE FROM manga_categories WHERE manga_id = ?").bind(item.id),
           ...categories.flatMap((name) => [
             env.DB.prepare("INSERT INTO categories (id, name) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name").bind(categoryId(name), name),
@@ -167,6 +170,25 @@ export default {
       });
       for (let index = 0; index < statements.length; index += 250) await env.DB.batch(statements.slice(index, index + 250));
       return json({ imported: manga.length, skippedAliases: supplied.length - manga.length }, 201, origin);
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/library/refresh") {
+      const payload = await request.json() as { updates?: Array<{ id?: string; latestChapter?: number }> };
+      const updates = (payload.updates ?? []).filter((item): item is { id: string; latestChapter: number } => Boolean(item.id) && Number.isFinite(item.latestChapter)).slice(0, 10);
+      if (!updates.length) return json({ error: "No source updates supplied." }, 400, origin);
+      const ids = updates.map((item) => item.id);
+      const placeholders = ids.map(() => "?").join(",");
+      const { results } = await env.DB.prepare(`SELECT id, chapter_count, unread_count, latest_chapter_number FROM manga WHERE id IN (${placeholders})`).bind(...ids).all();
+      const rows = new Map(results.map((row) => [String(row.id), row]));
+      const applied = updates.flatMap((update) => {
+        const row = rows.get(update.id);
+        if (!row) return [];
+        const previous = row.latest_chapter_number == null ? null : Number(row.latest_chapter_number);
+        const delta = previous == null || update.latestChapter <= previous ? 0 : Math.max(1, Math.floor(update.latestChapter - previous));
+        return [{ id: update.id, latestChapter: update.latestChapter, delta, chapters: (Number(row.chapter_count) || 0) + delta, unread: (Number(row.unread_count) || 0) + delta }];
+      });
+      if (applied.length) await env.DB.batch(applied.map((item) => env.DB.prepare("UPDATE manga SET latest_chapter_number = ?, chapter_count = ?, unread_count = ?, updated_at = unixepoch() WHERE id = ?").bind(item.latestChapter, item.chapters, item.unread, item.id)));
+      return json({ updates: applied }, 200, origin);
     }
 
     if (request.method === "PATCH" && url.pathname === "/api/library/progress") {
