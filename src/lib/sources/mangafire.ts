@@ -82,6 +82,8 @@ export type MangaFireChapter = {
   type?: string;
 };
 
+export type MangaFirePage = { url: string };
+
 export class MangaFireError extends Error {
   constructor(message: string, readonly status: number) {
     super(message);
@@ -132,5 +134,21 @@ export async function getMangaFireChapters(hid: string, language = "en") {
     const next = await requestJson<ApiResponse<MangaFireChapter>>(`/api/titles/${encodeURIComponent(hid)}/chapters`, nextParameters);
     chapters.push(...(next.items ?? []));
   }
-  return chapters;
+  return dedupeMangaFireChapters(chapters);
+}
+
+export function dedupeMangaFireChapters(chapters: MangaFireChapter[]) {
+  return [...chapters]
+    .sort((left, right) => {
+      const leftOfficial = left.type?.toLowerCase() === "official" ? 0 : 1;
+      const rightOfficial = right.type?.toLowerCase() === "official" ? 0 : 1;
+      return leftOfficial - rightOfficial || (right.createdAt ?? 0) - (left.createdAt ?? 0);
+    })
+    .filter((chapter, index, sorted) => sorted.findIndex(candidate => candidate.number === chapter.number) === index)
+    .sort((left, right) => right.number - left.number);
+}
+
+export async function getMangaFirePages(chapterId: number) {
+  const response = await requestJson<{ data: { pages?: MangaFirePage[] } }>(`/api/chapters/${encodeURIComponent(String(chapterId))}`);
+  return (response.data.pages ?? []).filter(page => Boolean(page.url));
 }

@@ -53,7 +53,7 @@ type DuplicateGroup = {
 export default {
   async fetch(request, env): Promise<Response> {
     const origin = originFor(request);
-    if (request.method === "OPTIONS") return new Response(null, { headers: { "Access-Control-Allow-Origin": origin, "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type", "Vary": "Origin" } });
+    if (request.method === "OPTIONS") return new Response(null, { headers: { "Access-Control-Allow-Origin": origin, "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS", "Access-Control-Allow-Headers": "Authorization, Content-Type", "Vary": "Origin" } });
     const url = new URL(request.url);
 
     if (request.method === "GET" && url.pathname === "/health") return json({ ok: true }, 200, origin);
@@ -61,7 +61,7 @@ export default {
     if (url.pathname.startsWith("/api/") && !isAuthorized(request, env)) return json({ error: "Unauthorized" }, 401, origin);
 
     if (request.method === "GET" && url.pathname === "/api/library") {
-      const { results } = await env.DB.prepare(`SELECT manga.id, manga.title, manga.source_name AS source, manga.source_url, manga.cover_url, manga.latest_chapter_number, manga.chapter_count AS chapters, manga.unread_count AS unread, COALESCE((SELECT json_group_array(categories.name) FROM manga_categories JOIN categories ON categories.id = manga_categories.category_id WHERE manga_categories.manga_id = manga.id), '[]') AS categories_json, COALESCE(reading_progress.progress_percent, 0) AS progress, reading_progress.last_read_at FROM manga LEFT JOIN reading_progress ON reading_progress.manga_id = manga.id WHERE manga.in_library = 1 ORDER BY manga.title`).all();
+      const { results } = await env.DB.prepare(`SELECT manga.id, manga.title, manga.source_name AS source, manga.source_url, manga.cover_url, manga.latest_chapter_number, manga.chapter_count AS chapters, manga.unread_count AS unread, COALESCE((SELECT json_group_array(categories.name) FROM manga_categories JOIN categories ON categories.id = manga_categories.category_id WHERE manga_categories.manga_id = manga.id), '[]') AS categories_json, COALESCE(reading_progress.progress_percent, 0) AS progress, reading_progress.last_read_at, reading_progress.page_index, reading_progress.source_chapter_id, reading_progress.chapter_number FROM manga LEFT JOIN reading_progress ON reading_progress.manga_id = manga.id WHERE manga.in_library = 1 ORDER BY manga.title`).all();
       const manga = results.map((row) => { const item = row as Record<string, unknown>; const categories = JSON.parse(String(item.categories_json || "[]")) as string[]; const { categories_json: _, ...rest } = item; void _; return { ...rest, categories, category: categories[0] || "Uncategorized" }; });
       return json({ manga }, 200, origin);
     }
@@ -191,13 +191,47 @@ export default {
       return json({ updates: applied }, 200, origin);
     }
 
+    if (request.method === "PATCH" && url.pathname === "/api/library/manage") {
+      const payload = await request.json() as { mangaId?: string; categories?: string[]; chapterCount?: number; unread?: number };
+      const mangaId = payload.mangaId?.trim();
+      const categories = payload.categories ? [...new Set(payload.categories.map(name => name.trim()).filter(Boolean))].slice(0, 20) : null;
+      const chapterCount = Number.isFinite(payload.chapterCount) ? Math.max(0, Math.floor(Number(payload.chapterCount))) : null;
+      const unread = Number.isFinite(payload.unread) ? Math.max(0, Math.floor(Number(payload.unread))) : null;
+      if (!mangaId || (categories === null && chapterCount === null && unread === null)) return json({ error: "mangaId and a library change are required." }, 400, origin);
+      if (categories && !categories.length) return json({ error: "At least one category is required." }, 400, origin);
+      const exists = await env.DB.prepare("SELECT id FROM manga WHERE id = ? AND in_library = 1").bind(mangaId).first();
+      if (!exists) return json({ error: "Library title not found." }, 404, origin);
+      const statements = [];
+      if (categories) statements.push(
+        ...categories.map(name => env.DB.prepare("INSERT INTO categories (id, name) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name").bind(categoryId(name), name)),
+        env.DB.prepare("DELETE FROM manga_categories WHERE manga_id = ?").bind(mangaId),
+        ...categories.map(name => env.DB.prepare("INSERT INTO manga_categories (manga_id, category_id) VALUES (?, ?)").bind(mangaId, categoryId(name))),
+      );
+      if (chapterCount !== null || unread !== null) statements.push(env.DB.prepare("UPDATE manga SET chapter_count = COALESCE(?, chapter_count), unread_count = COALESCE(?, unread_count), updated_at = unixepoch() WHERE id = ?").bind(chapterCount, unread, mangaId));
+      else statements.push(env.DB.prepare("UPDATE manga SET updated_at = unixepoch() WHERE id = ?").bind(mangaId));
+      await env.DB.batch(statements);
+      return json({ saved: true, categories, chapterCount, unread }, 200, origin);
+    }
+
+    if (request.method === "DELETE" && url.pathname === "/api/library/manage") {
+      const payload = await request.json() as { mangaId?: string };
+      const mangaId = payload.mangaId?.trim();
+      if (!mangaId) return json({ error: "mangaId is required." }, 400, origin);
+      const result = await env.DB.prepare("UPDATE manga SET in_library = 0, updated_at = unixepoch() WHERE id = ? AND in_library = 1").bind(mangaId).run();
+      if (!result.meta.changes) return json({ error: "Library title not found." }, 404, origin);
+      return json({ removed: true }, 200, origin);
+    }
+
     if (request.method === "PATCH" && url.pathname === "/api/library/progress") {
-      const payload = await request.json() as { mangaId?: string; progress?: number; unread?: number };
+      const payload = await request.json() as { mangaId?: string; progress?: number; unread?: number; pageIndex?: number; sourceChapterId?: string; chapterNumber?: number };
       if (!payload.mangaId) return json({ error: "mangaId is required." }, 400, origin);
       const progress = Math.max(0, Math.min(100, Number(payload.progress) || 0));
       const unread = Math.max(0, Number(payload.unread) || 0);
+      const pageIndex = Math.max(0, Math.floor(Number(payload.pageIndex) || 0));
+      const sourceChapterId = payload.sourceChapterId?.trim() || null;
+      const chapterNumber = Number.isFinite(payload.chapterNumber) ? Number(payload.chapterNumber) : null;
       await env.DB.batch([
-        env.DB.prepare("INSERT INTO reading_progress (manga_id, progress_percent, last_read_at) VALUES (?, ?, unixepoch()) ON CONFLICT(manga_id) DO UPDATE SET progress_percent = excluded.progress_percent, last_read_at = unixepoch()").bind(payload.mangaId, progress),
+        env.DB.prepare("INSERT INTO reading_progress (manga_id, progress_percent, page_index, source_chapter_id, chapter_number, last_read_at) VALUES (?, ?, ?, ?, ?, unixepoch()) ON CONFLICT(manga_id) DO UPDATE SET progress_percent = excluded.progress_percent, page_index = excluded.page_index, source_chapter_id = excluded.source_chapter_id, chapter_number = excluded.chapter_number, last_read_at = unixepoch()").bind(payload.mangaId, progress, pageIndex, sourceChapterId, chapterNumber),
         env.DB.prepare("UPDATE manga SET unread_count = ?, updated_at = unixepoch() WHERE id = ?").bind(unread, payload.mangaId),
       ]);
       return json({ saved: true }, 200, origin);

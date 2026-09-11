@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { sessionCookie, validSession } from "@/lib/mori-auth";
-import { getMangaFireChapters, getMangaFireDetails, listMangaFireTitles, MangaFireError } from "@/lib/sources/mangafire";
+import { getMangaFireChapters, getMangaFireDetails, getMangaFirePages, listMangaFireTitles, MangaFireError } from "@/lib/sources/mangafire";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -13,6 +13,12 @@ export async function GET(request: Request) {
   const action = url.searchParams.get("action") ?? "popular";
 
   try {
+    if (action === "pages") {
+      const chapterId = Number(url.searchParams.get("chapterId"));
+      if (!Number.isSafeInteger(chapterId) || chapterId <= 0) return Response.json({ error: "A valid chapterId is required." }, { status: 400 });
+      return Response.json({ pages: await getMangaFirePages(chapterId) });
+    }
+
     if (action === "details") {
       const hid = url.searchParams.get("hid")?.trim();
       if (!hid) return Response.json({ error: "hid is required." }, { status: 400 });
