@@ -23,7 +23,13 @@ const defaultCategories = ['Unread', 'Reading', 'Manhwa', 'Completed', 'Plan to 
 const availableSources = ['MangaFire', 'MangaDex', 'Asura Scans', 'MangaReader.to'];
 
 function orderedCategories(names: string[]) {
-  return ['Unread', ...new Set(names.filter(name => name && name !== 'Unread' && name !== 'All')), 'All'];
+  const canonical = names.map(name => name.trim().toLowerCase() === 'unread' ? 'Unread' : name.trim()).filter(name => name && name.toLowerCase() !== 'all');
+  return ['Unread', ...new Set(canonical.filter(name => name !== 'Unread')), 'All'];
+}
+
+function belongsToCategory(manga: Manga, category: string) {
+  const wanted = category.trim().toLowerCase();
+  return (manga.categories ?? [manga.category]).some(name => name.trim().toLowerCase() === wanted);
 }
 
 function shortTitle(title: string, limit = 42) {
@@ -163,7 +169,7 @@ export default function Home() {
     return () => { document.body.style.overflow = previousOverflow; window.removeEventListener('keydown', closeOnEscape); };
   }, [sourceDetails]);
   const filtered = useMemo(() => library
-    .filter(item => (category === 'All' || (item.categories ?? [item.category]).includes(category)) && item.title.toLowerCase().includes(query.toLowerCase()))
+    .filter(item => (category === 'All' || belongsToCategory(item, category)) && item.title.toLowerCase().includes(query.toLowerCase()))
     .sort((left, right) => left.unread - right.unread || left.title.localeCompare(right.title)), [library, category, query]);
   const unread = library.reduce((total, item) => total + item.unread, 0); const history = [...library].filter(item => item.lastRead).sort((a, b) => (b.lastRead ?? 0) - (a.lastRead ?? 0));
   const open = (next: Exclude<View, 'reader'>) => { setQuery(''); setView(next); };
@@ -221,7 +227,7 @@ export default function Home() {
         {view === 'library' && <>
           <div className="screen-heading"><div><p className="section-kicker">Your collection</p><h1>Library</h1><p>Pick up where you left off.</p></div><div className="heading-actions"><button className="refresh-button" onClick={reviewDuplicates}>Review duplicates{duplicateGroups.length ? ` (${duplicateGroups.length})` : ''}</button><button className="refresh-button" onClick={checkUpdates}>↻ Refresh</button></div></div>
           <section className="library-layout">
-            <aside className="categories"><div><p className="section-kicker">Categories</p><button onClick={addCategory}>+ Add</button></div>{categories.map(item => <button key={item} className={category === item ? 'category active' : 'category'} onClick={() => setCategory(item)}>{item}<span>{item === 'All' ? library.length : library.filter(manga => (manga.categories ?? [manga.category]).includes(item)).length}</span></button>)}</aside>
+            <aside className="categories"><div><p className="section-kicker">Categories</p><button onClick={addCategory}>+ Add</button></div>{categories.map(item => <button key={item} className={category === item ? 'category active' : 'category'} onClick={() => setCategory(item)}>{item}<span>{item === 'All' ? library.length : library.filter(manga => belongsToCategory(manga, item)).length}</span></button>)}</aside>
             <section className="library-panel"><div className="panel-heading"><div><p className="section-kicker">{category}</p><h2>{filtered.length} title{filtered.length === 1 ? '' : 's'}</h2></div></div><div className="manga-grid">{filtered.map(manga => <article className="manga-card" key={manga.id}><Cover manga={manga} onClick={() => startReader(manga)}/><div><strong title={manga.title}>{shortTitle(manga.title)}</strong><small>{manga.source} · {manga.chapters} chapters</small><div className="progress"><i style={{ width: `${manga.progress}%` }}/></div><span>{manga.unread ? `${manga.unread} unread` : `${manga.progress}% read`}</span></div><button className="read-button" onClick={() => startReader(manga)}>Read</button></article>)}{!filtered.length && <p className="empty">Nothing matches this category.</p>}</div></section>
           </section>
         </>}
