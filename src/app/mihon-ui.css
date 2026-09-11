@@ -1,0 +1,154 @@
+/* Neutral surfaces and a cover-first library layout inspired by Mihon. */
+html:root {
+  --paper: #eeeeee;
+  --ink: #242424;
+  --muted: #747474;
+  --line: #d1d1d1;
+  --green: #7655d6;
+  --orange: #8d68ea;
+}
+
+html:root .app-shell {
+  background: #eeeeee;
+}
+
+html:root .sidebar,
+html:root .topbar {
+  background: #f6f6f6;
+}
+
+html:root .library-panel {
+  border: 0;
+  background: transparent;
+}
+
+html:root .categories,
+html:root .manga-card,
+html:root .source-card,
+html:root .source-browser,
+html:root .feed-panel {
+  background: #f7f7f7;
+}
+
+html:root .manga-grid {
+  grid-template-columns: repeat(auto-fill, minmax(145px, 1fr));
+  gap: 20px 14px;
+}
+
+html:root .manga-card {
+  display: flex;
+  min-width: 0;
+  height: 100%;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 8px;
+}
+
+html:root .manga-card .cover {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 2 / 3;
+  border-radius: 8px 8px 0 0;
+}
+
+html:root .manga-card > div {
+  display: flex;
+  min-height: 92px;
+  flex: 1;
+  flex-direction: column;
+  padding: 9px 9px 10px;
+}
+
+html:root .manga-card strong,
+html:root .source-result strong {
+  display: -webkit-box;
+  min-height: 2.5em;
+  overflow: hidden;
+  line-height: 1.25;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+html:root .manga-card .progress {
+  margin-top: auto;
+}
+
+html:root .manga-card .read-button {
+  display: none;
+}
+
+html:root .source-result {
+  display: grid;
+  grid-template-rows: auto 2.5em 1.2em;
+  align-content: start;
+}
+
+html:root[data-theme='dark'] {
+  --paper: #121212;
+  --ink: #eeeeee;
+  --muted: #a6a6a6;
+  --line: #383838;
+  --green: #a887ff;
+  --orange: #b89aff;
+}
+
+html:root[data-theme='dark'] .app-shell {
+  background: #121212;
+}
+
+html:root[data-theme='dark'] .sidebar,
+html:root[data-theme='dark'] .topbar {
+  background: #191919;
+}
+
+html:root[data-theme='dark'] .categories,
+html:root[data-theme='dark'] .manga-card,
+html:root[data-theme='dark'] .source-card,
+html:root[data-theme='dark'] .source-browser,
+html:root[data-theme='dark'] .feed-panel {
+  border-color: #383838;
+  background: #202020;
+  color: var(--ink);
+}
+
+html:root[data-theme='dark'] .library-panel {
+  border: 0;
+  background: transparent;
+}
+
+html:root[data-theme='dark'] .category.active,
+html:root[data-theme='dark'] .nav-item.active,
+html:root[data-theme='dark'] .bottom-nav button.active {
+  background: #30264a;
+  color: #c5afff;
+}
+
+@media (max-width: 560px) {
+  html:root .library-panel {
+    padding: 14px 0 0;
+  }
+
+  html:root .panel-heading {
+    padding: 0 2px;
+  }
+
+  html:root .manga-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px 10px;
+  }
+
+  html:root .manga-card,
+  html:root .feed-row {
+    grid-template-columns: unset;
+  }
+
+  html:root .manga-card .cover {
+    width: 100%;
+    height: auto;
+  }
+}
