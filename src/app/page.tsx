@@ -138,9 +138,17 @@ async function loadMangaFirePages(chapterId: number) {
     return data.pages ?? [];
   } catch {
     try {
-      return await getMangaFirePages(chapterId);
+      const directPages = await getMangaFirePages(chapterId);
+      const response = await fetch('/api/sources/mangafire?action=sign-images', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ urls: directPages.map(page => page.url) }),
+      });
+      const data = await response.json() as { pages?: Array<{ url: string }>; error?: string };
+      if (!response.ok) throw new Error(data.error || 'Could not prepare chapter images.');
+      return data.pages ?? [];
     } catch {
-      throw new Error('MangaFire blocked the chapter pages. Try again later.');
+      throw new Error('MangaFire chapter images could not be prepared. Try again later.');
     }
   }
 }

@@ -75,6 +75,26 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const jar = await cookies();
   if (!validSession(jar.get(sessionCookie)?.value)) return Response.json({ error: "Unauthorized" }, { status: 401 });
+
+  const action = new URL(request.url).searchParams.get("action");
+  if (action === "sign-images") {
+    const payload = await request.json() as { urls?: unknown };
+    if (!Array.isArray(payload.urls) || payload.urls.length === 0 || payload.urls.length > 250) {
+      return Response.json({ error: "Supply between 1 and 250 image URLs." }, { status: 400 });
+    }
+
+    const urls: string[] = [];
+    for (const value of payload.urls) {
+      if (typeof value !== "string") return Response.json({ error: "Invalid image URL." }, { status: 400 });
+      let target: URL;
+      try { target = new URL(value); } catch { return Response.json({ error: "Invalid image URL." }, { status: 400 }); }
+      if (!isMangaFireImage(target)) return Response.json({ error: "Image host is not allowed." }, { status: 403 });
+      urls.push(proxiedImageUrl(target.toString(), request.url));
+    }
+
+    return Response.json({ pages: urls.map(url => ({ url })) });
+  }
+
   const payload = await request.json() as { entries?: Array<{ id?: string; hid?: string }> };
   const entries = (payload.entries ?? []).filter((entry): entry is { id: string; hid: string } => Boolean(entry.id && entry.hid)).slice(0, 5);
   if (!entries.length) return Response.json({ error: "No MangaFire entries supplied." }, { status: 400 });
