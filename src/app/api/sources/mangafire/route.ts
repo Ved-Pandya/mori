@@ -33,12 +33,6 @@ export async function GET(request: Request) {
   const action = url.searchParams.get("action") ?? "popular";
 
   try {
-    if (action === "__image-health") {
-      const target = "https://o48.mfcdn3.xyz/mf/12a3db61fa0d4f41a6d5791cd6a7e8069233aa405abea1b34b5a37edf329c58d235ddf1e496423eaff35/h/p.jpg";
-      const image = await fetch(target, { signal: AbortSignal.timeout(15000), cache: "no-store", headers: { Accept: "image/*", Referer: "https://mangafire.to/", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36" } });
-      return Response.json({ status: image.status, contentType: image.headers.get("Content-Type"), contentLength: image.headers.get("Content-Length") });
-    }
-
     if (action === "image") {
       const sourceUrl = url.searchParams.get("url") ?? "";
       const expires = Number(url.searchParams.get("expires"));
