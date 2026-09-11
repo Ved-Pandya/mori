@@ -38,7 +38,6 @@ const validImageSignature = async (sourceUrl: string, expires: number, signature
   }
 };
 const isMangaFireImage = (url: URL) => url.protocol === "https:" && /^(?:[a-z0-9-]+\.)*mfcdn\d*\.xyz$/i.test(url.hostname);
-const isMangaFireApi = (url: URL) => url.protocol === "https:" && url.hostname === "mangafire.to" && url.pathname.startsWith("/api/");
 const sourceId = (name: string) => `source:${name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
 const categoryId = (name: string) => `category:${name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
 const normalizedTitle = (title: string) => title.trim().toLocaleLowerCase().replace(/\s+/g, " ");
@@ -87,15 +86,6 @@ export default {
     }
 
     if (url.pathname.startsWith("/api/") && !isAuthorized(request, env)) return json({ error: "Unauthorized" }, 401, origin);
-
-    if (request.method === "GET" && url.pathname === "/api/source/mangafire") {
-      const sourceUrl = url.searchParams.get("url") ?? "";
-      let target: URL;
-      try { target = new URL(sourceUrl); } catch { return json({ error: "Invalid source URL." }, 400, origin); }
-      if (!isMangaFireApi(target)) return json({ error: "Source URL is not allowed." }, 403, origin);
-      const upstream = await fetch(target, { redirect: "manual", headers: { "Accept": "application/json", "Referer": "https://mangafire.to/", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36" } });
-      return new Response(upstream.body, { status: upstream.status, headers: { "Cache-Control": "no-store", "Content-Type": upstream.headers.get("Content-Type") ?? "application/json", "X-Content-Type-Options": "nosniff" } });
-    }
 
     if (request.method === "GET" && url.pathname === "/api/library") {
       const { results } = await env.DB.prepare(`SELECT manga.id, manga.title, manga.source_name AS source, manga.source_url, manga.cover_url, manga.latest_chapter_number, manga.chapter_count AS chapters, manga.unread_count AS unread, COALESCE((SELECT json_group_array(categories.name) FROM manga_categories JOIN categories ON categories.id = manga_categories.category_id WHERE manga_categories.manga_id = manga.id), '[]') AS categories_json, COALESCE(reading_progress.progress_percent, 0) AS progress, reading_progress.last_read_at, reading_progress.page_index, reading_progress.source_chapter_id, reading_progress.chapter_number FROM manga LEFT JOIN reading_progress ON reading_progress.manga_id = manga.id WHERE manga.in_library = 1 ORDER BY manga.title`).all();

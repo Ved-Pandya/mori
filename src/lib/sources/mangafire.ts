@@ -98,23 +98,10 @@ async function requestJson<T>(path: string, parameters: Array<[string, string]> 
   if (typeof window === "undefined") {
     headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36";
   }
-  let response: Response | null = null;
-  if (typeof window === "undefined" && process.env.MORI_WORKER_URL && process.env.MORI_API_TOKEN) {
-    try {
-      const proxy = new URL("/api/source/mangafire", process.env.MORI_WORKER_URL);
-      proxy.searchParams.set("url", url.toString());
-      response = await fetch(proxy, { signal: AbortSignal.timeout(8000), headers: { Accept: "application/json", Authorization: `Bearer ${process.env.MORI_API_TOKEN}` }, cache: "no-store" });
-    } catch {
-      response = null;
-    }
-  }
-  if (!response?.ok) {
-    try {
-      response = await fetch(url, { signal: AbortSignal.timeout(8000), headers });
-    } catch {
-      if (!response) throw new MangaFireError("MangaFire could not be reached through Mori.", 503);
-    }
-  }
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(5000),
+    headers,
+  });
   if (!response.ok) {
     const body = await response.text();
     const captcha = response.status === 403 && body.includes("captcha_required");
