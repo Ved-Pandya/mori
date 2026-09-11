@@ -109,7 +109,7 @@ async function loadMangaFireList(mode: 'popular' | 'latest' | 'search', query: s
       const direct = await listMangaFireTitles({ type: mode, query: query.trim() || undefined, page: 1 });
       return { items: direct.items ?? [], usedDevice: true };
     } catch {
-      throw new Error('MangaFire blocked both Mori\'s server and this device. Try again later or use MangaDex.');
+      throw new Error('MangaFire is temporarily unavailable through all configured routes. Try again shortly.');
     }
   }
 }
@@ -125,7 +125,7 @@ async function loadMangaFireTitle(hid: string) {
       const [manga, chapters] = await Promise.all([getMangaFireDetails(hid), getMangaFireChapters(hid)]);
       return { manga, chapters, usedDevice: true };
     } catch {
-      throw new Error('MangaFire blocked both Mori\'s server and this device. Try again later or use MangaDex.');
+      throw new Error('MangaFire is temporarily unavailable through all configured routes. Try again shortly.');
     }
   }
 }
