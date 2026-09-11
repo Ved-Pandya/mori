@@ -3,6 +3,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { getMangaFireChapters, getMangaFireDetails, listMangaFireTitles } from '@/lib/sources/mangafire';
 
 type View = 'library' | 'updates' | 'browse' | 'history' | 'duplicates' | 'reader';
 type Manga = { id: string; title: string; source: string; sourceUrl?: string; source_url?: string; coverUrl?: string; cover_url?: string; latestChapter?: number; latest_chapter_number?: number; category: string; categories?: string[]; chapters: number; unread: number; progress: number; color: string; lastRead?: number; last_read_at?: number };
@@ -72,6 +73,66 @@ async function decodeMihonBackup(file: File): Promise<Manga[]> {
   return (root.get(1) ?? []).filter((v): v is Uint8Array => v instanceof Uint8Array).map((value, index) => { const manga = readProto(value); const chapters = (manga.get(16) ?? []).filter((v): v is Uint8Array => v instanceof Uint8Array).map(readProto); const read = chapters.filter(chapter => numberField(chapter, 4) !== BigInt(0)).length; const categories = (manga.get(17) ?? []).filter((v): v is bigint => typeof v === 'bigint').map(id => categoryNames.get(id.toString())).filter((name): name is string => Boolean(name)); const category = categories[0] || 'Uncategorized'; const sourceUrl = textField(manga, 2); return { id: `mihon:${numberField(manga, 1)}:${sourceUrl}`, title: textField(manga, 3), source: sourceNames.get(numberField(manga, 1).toString()) || 'Imported source', sourceUrl, category, categories: categories.length ? categories : [category], chapters: chapters.length, unread: Math.max(0, chapters.length - read), progress: chapters.length ? Math.round((read / chapters.length) * 100) : 0, color: ['coral', 'blue', 'gold', 'green'][index % 4] }; }).filter(manga => manga.title);
 }
 
+async function loadMangaFireList(mode: 'popular' | 'latest' | 'search', query: string) {
+  const parameters = new URLSearchParams({ action: mode, page: '1' });
+  if (mode === 'search') parameters.set('q', query.trim());
+  try {
+    const response = await fetch(`/api/sources/mangafire?${parameters}`);
+    const data = await response.json() as { items?: SourceTitle[]; error?: string };
+    if (!response.ok) throw new Error(data.error || 'MangaFire is unavailable from Mori.');
+    return { items: data.items ?? [], usedDevice: false };
+  } catch {
+    try {
+      const direct = await listMangaFireTitles({ type: mode, query: query.trim() || undefined, page: 1 });
+      return { items: direct.items ?? [], usedDevice: true };
+    } catch {
+      throw new Error('MangaFire blocked both Mori\'s server and this device. Try again later or use MangaDex.');
+    }
+  }
+}
+
+async function loadMangaFireTitle(hid: string) {
+  try {
+    const response = await fetch(`/api/sources/mangafire?action=details&hid=${encodeURIComponent(hid)}`);
+    const data = await response.json() as { details?: SourceDetails; chapters?: SourceChapter[]; error?: string };
+    if (!response.ok || !data.details) throw new Error(data.error || 'Could not load manga details from Mori.');
+    return { manga: data.details, chapters: data.chapters ?? [], usedDevice: false };
+  } catch {
+    try {
+      const [manga, chapters] = await Promise.all([getMangaFireDetails(hid), getMangaFireChapters(hid)]);
+      return { manga, chapters, usedDevice: true };
+    } catch {
+      throw new Error('MangaFire blocked both Mori\'s server and this device. Try again later or use MangaDex.');
+    }
+  }
+}
+
+async function refreshMangaFireBatch(batch: Array<{ id: string; hid: string }>) {
+  let updates: Array<{ id: string; latestChapter: number }> = [];
+  let pending = batch;
+  try {
+    const response = await fetch('/api/sources/mangafire', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ entries: batch }) });
+    const data = await response.json() as { updates?: Array<{ id: string; latestChapter: number }>; errors?: Array<{ id: string }> };
+    if (response.ok) {
+      updates = data.updates ?? [];
+      const failedIds = new Set((data.errors ?? []).map(error => error.id));
+      pending = batch.filter(entry => failedIds.has(entry.id));
+    }
+  } catch {}
+
+  const failed: string[] = [];
+  for (const entry of pending) {
+    try {
+      const details = await getMangaFireDetails(entry.hid);
+      if (Number.isFinite(details.latestChapter)) updates.push({ id: entry.id, latestChapter: Number(details.latestChapter) });
+      else failed.push(entry.id);
+    } catch {
+      failed.push(entry.id);
+    }
+  }
+  return { updates, failed };
+}
+
 function Cover({ manga, onClick }: { manga: Manga; onClick: () => void }) {
   return <button className={`cover ${manga.color}`} onClick={onClick} aria-label={`Read ${manga.title}`}>{manga.coverUrl ? <img src={manga.coverUrl} alt=""/> : manga.title.split(' ').slice(0, 2).map(word => word[0]).join('')}</button>;
 }
@@ -92,12 +153,41 @@ export default function Home() {
   const saveProgress = (manga: Manga, progress = manga.progress, unread = manga.unread) => { void fetch('/api/library', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mangaId: manga.id, progress, unread }) }); };
   const startReader = (manga: Manga) => { setPreviousView(view); setSelected(manga); setLibrary(items => items.map(item => item.id === manga.id ? { ...item, lastRead: Date.now() } : item)); saveProgress(manga); setView('reader'); };
   const markRead = () => { if (!selected) return; const progress = Math.min(100, selected.progress + 8); saveProgress(selected, progress, 0); setLibrary(items => items.map(item => item.id === selected.id ? { ...item, unread: 0, progress, lastRead: Date.now() } : item)); };
-  const checkUpdates = async () => { if (refreshing) return; if (!sources.includes('MangaFire')) { setNotice('Select MangaFire in Browse before refreshing.'); setView('browse'); return; } const entries = library.filter(manga => manga.source === 'MangaFire').map(manga => ({ id: manga.id, hid: mangaFireHid(manga) })).filter(entry => entry.hid); if (!entries.length) { setNotice('No MangaFire library entries can be matched yet.'); return; } setRefreshing(true); setView('updates'); let checked = 0; let found = 0; let failed = 0; try { for (let index = 0; index < entries.length; index += 5) { const batch = entries.slice(index, index + 5); setNotice(`Refreshing MangaFire… ${checked}/${entries.length}`); const sourceResponse = await fetch('/api/sources/mangafire', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ entries: batch }) }); const sourceData = await sourceResponse.json() as { updates?: Array<{ id: string; latestChapter: number }>; errors?: Array<{ id: string }> }; if (!sourceResponse.ok) throw new Error('MangaFire refresh failed.'); failed += sourceData.errors?.length ?? 0; if (sourceData.updates?.length) { const saveResponse = await fetch('/api/library/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ updates: sourceData.updates }) }); const saved = await saveResponse.json() as { updates?: Array<{ id: string; latestChapter: number; delta: number; chapters: number; unread: number }>; error?: string }; if (!saveResponse.ok) throw new Error(saved.error || 'Could not save source updates.'); found += saved.updates?.reduce((total, update) => total + update.delta, 0) ?? 0; if (saved.updates?.length) setLibrary(current => current.map(manga => { const update = saved.updates?.find(item => item.id === manga.id); return update ? { ...manga, latestChapter: update.latestChapter, chapters: update.chapters, unread: update.unread } : manga; })); } checked += batch.length; } setNotice(`MangaFire refresh complete: checked ${checked}, found ${found} new chapter${found === 1 ? '' : 's'}${failed ? `, ${failed} failed` : ''}.`); } catch (error) { setNotice(error instanceof Error ? error.message : 'Refresh failed.'); } finally { setRefreshing(false); } };
+  const checkUpdates = async () => {
+    if (refreshing) return;
+    if (!sources.includes('MangaFire')) { setNotice('Select MangaFire in Browse before refreshing.'); setView('browse'); return; }
+    const entries = library.filter(manga => manga.source === 'MangaFire').map(manga => ({ id: manga.id, hid: mangaFireHid(manga) })).filter(entry => entry.hid);
+    if (!entries.length) { setNotice('No MangaFire library entries can be matched yet.'); return; }
+    setRefreshing(true);
+    setView('updates');
+    let checked = 0; let found = 0; let failed = 0;
+    try {
+      for (let index = 0; index < entries.length; index += 5) {
+        const batch = entries.slice(index, index + 5);
+        setNotice(`Refreshing MangaFire… ${checked}/${entries.length}`);
+        const sourceData = await refreshMangaFireBatch(batch);
+        failed += sourceData.failed.length;
+        if (sourceData.updates.length) {
+          const saveResponse = await fetch('/api/library/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ updates: sourceData.updates }) });
+          const saved = await saveResponse.json() as { updates?: Array<{ id: string; latestChapter: number; delta: number; chapters: number; unread: number }>; error?: string };
+          if (!saveResponse.ok) throw new Error(saved.error || 'Could not save source updates.');
+          found += saved.updates?.reduce((total, update) => total + update.delta, 0) ?? 0;
+          if (saved.updates?.length) setLibrary(current => current.map(manga => { const update = saved.updates?.find(item => item.id === manga.id); return update ? { ...manga, latestChapter: update.latestChapter, chapters: update.chapters, unread: update.unread } : manga; }));
+        }
+        checked += batch.length;
+      }
+      setNotice(`MangaFire refresh complete: checked ${checked}, found ${found} new chapter${found === 1 ? '' : 's'}${failed ? `, ${failed} failed` : ''}.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Refresh failed.');
+    } finally {
+      setRefreshing(false);
+    }
+  };
   const addCategory = () => { const name = prompt('Category name'); if (name?.trim() && !categories.includes(name.trim())) setCategories(current => [...current, name.trim()]); };
   const reviewDuplicates = async () => { setView('duplicates'); setDuplicatesLoading(true); try { const response = await fetch('/api/library/duplicates'); if (!response.ok) throw new Error(); const data = await response.json() as { groups?: DuplicateGroup[] }; setDuplicateGroups(normaliseDuplicateGroups(data.groups ?? [])); } catch { setNotice('Could not load duplicate candidates.'); } finally { setDuplicatesLoading(false); } };
   const mergeDuplicateGroup = async (group: DuplicateGroup, canonical: Manga) => { const duplicateIds = group.items.filter(item => item.id !== canonical.id).map(item => item.id); if (!window.confirm(`Keep “${canonical.title}” from ${canonical.source} and merge ${duplicateIds.length} other entr${duplicateIds.length === 1 ? 'y' : 'ies'} into it?`)) return; setMergingGroup(group.id); try { const response = await fetch('/api/library/duplicates', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ canonicalId: canonical.id, duplicateIds }) }); if (!response.ok) { const data = await response.json() as { error?: string }; throw new Error(data.error || 'Merge failed.'); } const [libraryResponse, duplicatesResponse] = await Promise.all([fetch('/api/library'), fetch('/api/library/duplicates')]); if (!libraryResponse.ok || !duplicatesResponse.ok) throw new Error('Merge completed, but refreshing the library failed.'); const normalised = normaliseRemoteLibrary(((await libraryResponse.json()) as { manga?: Manga[] }).manga ?? []); setLibrary(normalised); setCategories(['All', ...new Set(normalised.flatMap(item => item.categories ?? [item.category]))]); setDuplicateGroups(normaliseDuplicateGroups(((await duplicatesResponse.json()) as { groups?: DuplicateGroup[] }).groups ?? [])); setNotice(`Merged ${duplicateIds.length + 1} entries. Kept ${canonical.title} from ${canonical.source}.`); } catch (error) { setNotice(error instanceof Error ? error.message : 'Merge failed.'); } finally { setMergingGroup(null); } };
-  const browseMangaFire = async (mode: 'popular' | 'latest' | 'search' = sourceMode) => { if (mode === 'search' && !sourceQuery.trim()) return; setSourceMode(mode); setSourceLoading(true); setSourceDetails(null); try { const parameters = new URLSearchParams({ action: mode, page: '1' }); if (mode === 'search') parameters.set('q', sourceQuery.trim()); const response = await fetch(`/api/sources/mangafire?${parameters}`); const data = await response.json() as { items?: SourceTitle[]; error?: string }; if (!response.ok) throw new Error(data.error || 'MangaFire is unavailable.'); setSourceResults(data.items ?? []); setNotice(`Loaded ${data.items?.length ?? 0} titles from MangaFire.`); } catch (error) { setSourceResults([]); setNotice(error instanceof Error ? error.message : 'MangaFire is unavailable.'); } finally { setSourceLoading(false); } };
-  const openSourceTitle = async (manga: SourceTitle) => { setSourceLoading(true); try { const response = await fetch(`/api/sources/mangafire?action=details&hid=${encodeURIComponent(manga.hid)}`); const data = await response.json() as { details?: SourceDetails; chapters?: SourceChapter[]; error?: string }; if (!response.ok || !data.details) throw new Error(data.error || 'Could not load manga details.'); setSourceDetails({ manga: data.details, chapters: data.chapters ?? [] }); } catch (error) { setNotice(error instanceof Error ? error.message : 'Could not load manga details.'); } finally { setSourceLoading(false); } };
+  const browseMangaFire = async (mode: 'popular' | 'latest' | 'search' = sourceMode) => { if (mode === 'search' && !sourceQuery.trim()) return; setSourceMode(mode); setSourceLoading(true); setSourceDetails(null); try { const result = await loadMangaFireList(mode, sourceQuery); setSourceResults(result.items); setNotice(`Loaded ${result.items.length} titles from MangaFire${result.usedDevice ? ' through this device' : ''}.`); } catch (error) { setSourceResults([]); setNotice(error instanceof Error ? error.message : 'MangaFire is unavailable.'); } finally { setSourceLoading(false); } };
+  const openSourceTitle = async (manga: SourceTitle) => { setSourceLoading(true); try { const result = await loadMangaFireTitle(manga.hid); setSourceDetails({ manga: result.manga, chapters: result.chapters }); if (result.usedDevice) setNotice('MangaFire details loaded through this device.'); } catch (error) { setNotice(error instanceof Error ? error.message : 'Could not load manga details.'); } finally { setSourceLoading(false); } };
   const addSourceTitle = async () => { if (!sourceDetails) return; setSourceLoading(true); try { const { manga, chapters } = sourceDetails; const chapterCount = new Set(chapters.map(chapter => chapter.number)).size; const sourceUrl = `/title/${manga.hid}${manga.slug ? `-${manga.slug}` : ''}`; const item: Manga = { id: `source:mangafire:${manga.hid}`, title: manga.title, source: 'MangaFire', sourceUrl, coverUrl: manga.poster?.large ?? manga.poster?.medium ?? manga.poster?.small, category: 'Uncategorized', categories: ['Uncategorized'], chapters: chapterCount, unread: chapterCount, progress: 0, color: 'coral' }; const response = await fetch('/api/library', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ manga: [item] }) }); if (!response.ok) throw new Error('Could not add this title to the library.'); const libraryResponse = await fetch('/api/library'); if (!libraryResponse.ok) throw new Error('Title was added, but the library could not be refreshed.'); const normalised = normaliseRemoteLibrary(((await libraryResponse.json()) as { manga?: Manga[] }).manga ?? []); setLibrary(normalised); setCategories(['All', ...new Set(normalised.flatMap(entry => entry.categories ?? [entry.category]))]); setNotice(`Added ${manga.title} to your library.`); } catch (error) { setNotice(error instanceof Error ? error.message : 'Could not add this title.'); } finally { setSourceLoading(false); } };
   const importBackup = async (event: ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; if (!file) return; try { const imported = file.name.toLowerCase().endsWith('.tachibk') || file.name.toLowerCase().endsWith('.proto.gz') ? await decodeMihonBackup(file) : normaliseBackup(JSON.parse(await file.text())); if (!imported.length) throw new Error('This backup has no readable library titles.'); const cloud = await fetch('/api/library', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ manga: imported }) }); if (!cloud.ok) throw new Error('Cloud import failed.'); const importResult = await cloud.json() as { imported?: number; skippedAliases?: number }; const [libraryResponse, duplicatesResponse] = await Promise.all([fetch('/api/library'), fetch('/api/library/duplicates')]); if (!libraryResponse.ok || !duplicatesResponse.ok) throw new Error('Import completed, but refreshing the library failed.'); const normalised = normaliseRemoteLibrary(((await libraryResponse.json()) as { manga?: Manga[] }).manga ?? []); setLibrary(normalised); setCategories(['All', ...new Set(normalised.flatMap(item => item.categories ?? [item.category]))]); setDuplicateGroups(normaliseDuplicateGroups(((await duplicatesResponse.json()) as { groups?: DuplicateGroup[] }).groups ?? [])); setNotice(`Imported ${importResult.imported ?? imported.length} titles${importResult.skippedAliases ? `; kept ${importResult.skippedAliases} previous merge choices` : ''}.`); setView('library'); } catch (error) { setNotice(error instanceof Error ? `Import failed: ${error.message}` : 'Import failed.'); } event.target.value = ''; };
   const nav = [{ id: 'library' as const, label: 'Library', icon: '▦', count: library.length }, { id: 'updates' as const, label: 'Updates', icon: '↻', count: unread }, { id: 'browse' as const, label: 'Browse', icon: '⌕' }, { id: 'history' as const, label: 'History', icon: '◷' }];

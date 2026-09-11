@@ -90,12 +90,15 @@ export class MangaFireError extends Error {
 
 async function requestJson<T>(path: string, parameters: Array<[string, string]> = []): Promise<T> {
   const url = signedUrl(path, parameters);
+  const headers: Record<string, string> = { Accept: "application/json" };
+  // Browsers control User-Agent themselves. Supplying it there is forbidden and
+  // can cause an otherwise valid device-side fallback request to be rejected.
+  if (typeof window === "undefined") {
+    headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36";
+  }
   const response = await fetch(url, {
     signal: AbortSignal.timeout(5000),
-    headers: {
-      Accept: "application/json",
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36",
-    },
+    headers,
   });
   if (!response.ok) {
     const body = await response.text();
