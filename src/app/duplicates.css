@@ -1,0 +1,128 @@
+.heading-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.duplicate-list {
+  display: grid;
+  gap: 16px;
+}
+
+.duplicate-group {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.duplicate-group > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--line);
+  background: #f5f3f9;
+  font-family: Arial, sans-serif;
+}
+
+.duplicate-group.strong > header {
+  background: #eee7fb;
+}
+
+.duplicate-group header strong,
+.duplicate-group header span {
+  display: block;
+}
+
+.duplicate-group header strong {
+  color: var(--green);
+  font-size: 12px;
+}
+
+.duplicate-group header span,
+.duplicate-group header small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.duplicate-options {
+  display: grid;
+}
+
+.duplicate-option {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) auto;
+  gap: 13px;
+  align-items: center;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.duplicate-option:last-child {
+  border-bottom: 0;
+}
+
+.duplicate-option .cover {
+  width: 52px;
+  height: 70px;
+}
+
+.duplicate-option strong,
+.duplicate-option small,
+.duplicate-option span {
+  display: block;
+}
+
+.duplicate-option strong {
+  font-size: 14px;
+}
+
+.duplicate-option small,
+.duplicate-option span {
+  margin-top: 5px;
+  color: var(--muted);
+  font: 10px Arial, sans-serif;
+}
+
+.duplicate-option span {
+  color: var(--orange);
+}
+
+.duplicate-option .primary-button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+:root[data-theme='dark'] .duplicate-group {
+  border-color: #41344f;
+  background: #211a2c;
+}
+
+:root[data-theme='dark'] .duplicate-group > header,
+:root[data-theme='dark'] .duplicate-group.strong > header {
+  border-color: #41344f;
+  background: #2c213b;
+}
+
+@media (max-width: 560px) {
+  .screen-heading .heading-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .duplicate-option {
+    grid-template-columns: 46px minmax(0, 1fr);
+    padding: 12px;
+  }
+
+  .duplicate-option .cover {
+    width: 46px;
+    height: 64px;
+  }
+
+  .duplicate-option .primary-button {
+    grid-column: 1 / -1;
+  }
+}
